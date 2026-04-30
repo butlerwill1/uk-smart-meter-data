@@ -1,32 +1,44 @@
-<!-- Summary: Portfolio-ready AWS data pipeline for UK smart meter half-hourly consumption analytics with external Bronze data. -->
+<!-- Summary: Portfolio-ready AWS data pipeline for UK smart meter half-hourly consumption analytics with AWS Glue execution. -->
 # Energy Smart Meter Pipeline
 
 A portfolio-ready AWS-native data engineering project for UK smart meter half-hourly consumption data.
 
-The pipeline treats an external source dataset as the Bronze layer (read-only), transforms to Silver and Gold in your own S3 bucket, exposes data through Glue Catalog and Athena, and runs SQL QA checks designed for LLM/data QA agents.
+The pipeline treats an external source dataset as the Bronze layer (read-only), runs PySpark transformations in AWS Glue jobs, writes Silver and Gold parquet data to your S3 bucket, exposes data through Glue Catalog and Athena, and keeps QA/run-log workflows for agent-driven validation.
 
 ## Why this project is useful
 
-- Uses lightweight AWS-native orchestration (EventBridge Scheduler + optional Step Functions), not Airflow.
-- Uses Glue + Athena over S3 parquet for practical analytics architecture.
-- Uses read-only external Bronze data to avoid redundant copy/storage cost and simplify the portfolio setup.
-- Implements realistic QA checks for freshness, completeness, uniqueness, nulls, business constraints, and drift thresholds.
-- Demonstrates idempotent daily/backfill processing by overwriting only date partitions in Silver/Gold.
+- Uses AWS Glue jobs for serverless PySpark execution.
+- Uses EventBridge Scheduler to trigger Glue directly (daily and one-off backfills).
+- Avoids copying Bronze data, reducing storage cost and complexity.
+- Uses Glue + Athena over S3 parquet for a realistic analytics pattern.
+- Preserves idempotent daily processing by overwriting only target date partitions.
+
+## Execution environment for PySpark
+
+PySpark transformations run in **AWS Glue** (production target).
+
+- Main transform script: `src/transform_daily.py`
+- Uploaded by Terraform to:
+  - `s3://<data_bucket>/scripts/transform_daily.py`
+- Glue job runs that script using Glue Spark runtime and writes Silver/Gold partitions to your data bucket.
+- Script accepts `--run-date YYYY-MM-DD`.
+
+Local fallback remains available for development with standard `SparkSession.builder`.
 
 ## Architecture
 
 - Bronze: external read-only parquet dataset (example: `s3://weave.energy/smart-meter.parquet`)
+- Transform compute: AWS Glue job (`transform_daily`)
 - Silver/Gold/Run Log storage: S3 parquet in your data bucket
 - Metadata: AWS Glue Data Catalog external tables
 - Query engine: Athena
-- Scheduling: EventBridge Scheduler (daily cron/rate + optional one-off backfill)
-- Orchestration visibility: optional Step Functions
+- Scheduling: EventBridge Scheduler -> Glue `StartJobRun`
+- Optional orchestration visibility: Step Functions wrapper around Glue job (disabled by default)
 - Infrastructure as code: Terraform
-- Transform engine: Python + PySpark (optional DuckDB fallback for local small runs)
 
 Pipeline:
 
-`External Source (Bronze) -> Silver -> Gold -> QA checks -> Run log`
+`External Source (Bronze) -> AWS Glue PySpark Transform -> Silver -> Gold -> QA checks -> Run log`
 
 ## Dataset shape
 
@@ -42,12 +54,10 @@ Expected source columns:
 - `lv_feeder_unique_id`
 - `bbox`
 
-Each row is a half-hourly reading for a feeder connected to a secondary substation.
-
 ## Assumptions
 
-- External Bronze dataset is stable and accessible from your AWS environment.
-- Pipeline does not modify external Bronze and does not copy Bronze into your S3 bucket.
+- External Bronze dataset is stable and accessible from your AWS account/network context.
+- Bronze is read-only and never modified by this pipeline.
 
 ## Project layout
 
@@ -60,6 +70,7 @@ energy-smart-meter-pipeline/
 │   ├── outputs.tf
 │   ├── s3.tf
 │   ├── glue_catalog.tf
+│   ├── glue_job.tf
 │   ├── athena.tf
 │   ├── iam.tf
 │   ├── eventbridge.tf
@@ -85,117 +96,6 @@ energy-smart-meter-pipeline/
 └── pyproject.toml
 ```
 
-## Pipeline logic
-
-### 1) Load external source (Bronze, read-only)
-
-Run:
-
-```bash
-python src/load_source_data.py --run-date 2024-02-12 --source-uri s3://weave.energy/smart-meter.parquet
-```
-
-Behavior:
-
-- Reads external parquet/GeoParquet directly.
-- Filters by `run_date` from `data_collection_log_timestamp`.
-- Does not write Bronze data to your S3 bucket.
-
-### 2) Build Silver + Gold
-
-Run:
-
-```bash
-python src/transform_daily.py --run-date 2024-02-12 --source-uri s3://weave.energy/smart-meter.parquet
-```
-
-Filtering behavior:
-
-- Run-date filter is applied while reading the external source dataset.
-
-Silver columns include:
-
-- `collection_date`
-- `hour_of_day`
-- `minute_of_hour`
-- `half_hour_slot`
-- `day_of_week`
-- `is_weekend`
-- `composite_feeder_id`
-- `consumption_per_active_device`
-
-Silver output:
-
-- `s3://<bucket>/<prefix>/energy/silver/smart_meter_half_hourly_clean/collection_date=YYYY-MM-DD/`
-
-Gold outputs:
-
-- `gold_peak_demand_substation_day`
-- `gold_avg_load_profile_day`
-
-Gold output paths:
-
-- `s3://<bucket>/<prefix>/energy/gold/gold_peak_demand_substation_day/consumption_date=YYYY-MM-DD/`
-- `s3://<bucket>/<prefix>/energy/gold/gold_avg_load_profile_day/consumption_date=YYYY-MM-DD/`
-
-### 3) Run QA checks (Athena)
-
-Run:
-
-```bash
-python src/run_qa_checks.py --run-date 2024-02-12
-```
-
-Executes SQL files in `sql/` for:
-
-- Freshness
-- Completeness (48 slots + timestamp coverage)
-- Uniqueness
-- Null checks
-- Business rules + distribution drift checks
-
-### 4) Write run log
-
-Run:
-
-```bash
-python src/write_run_log.py \
-  --run-date 2024-02-12 \
-  --status SUCCESS \
-  --input-row-count 100000 \
-  --silver-row-count 100000 \
-  --peak-table-row-count 1200 \
-  --load-profile-row-count 48
-```
-
-Writes one parquet row per run to:
-
-- `s3://<bucket>/<prefix>/energy/meta/pipeline_run_log/run_date=YYYY-MM-DD/`
-
-## Backfill and idempotency
-
-Backfill any day:
-
-```bash
-python src/transform_daily.py --run-date 2024-02-12 --source-uri s3://weave.energy/smart-meter.parquet
-```
-
-Idempotency behavior:
-
-- Re-running the same date overwrites only that date partitions in Silver/Gold.
-- Unrelated dates are not rewritten.
-- External Bronze source is never modified.
-
-## Optional local mode (DuckDB)
-
-For small local test runs:
-
-```bash
-python src/transform_daily.py --run-date 2024-02-12 --source-uri ./data/source/*.parquet --local-engine duckdb
-```
-
-AWS/Athena remains the primary target for production-like execution.
-
 ## Terraform deployment
 
 ### 1) Configure variables
@@ -212,11 +112,9 @@ athena_results_bucket_name = "my-smart-meter-athena-results"
 data_prefix                = "portfolio"
 preserve_data              = true
 
-enable_step_functions      = true
-load_source_lambda_arn     = "arn:aws:lambda:eu-west-2:123456789012:function:smart-meter-load-source"
-transform_lambda_arn       = "arn:aws:lambda:eu-west-2:123456789012:function:smart-meter-transform"
-qa_lambda_arn              = "arn:aws:lambda:eu-west-2:123456789012:function:smart-meter-qa"
-run_log_lambda_arn         = "arn:aws:lambda:eu-west-2:123456789012:function:smart-meter-log"
+glue_worker_type           = "G.1X"
+glue_number_of_workers     = 2
+enable_step_functions_wrapper = false
 
 daily_schedule_expression  = "cron(0 2 * * ? *)"
 scheduler_timezone         = "Europe/London"
@@ -235,84 +133,69 @@ terraform plan
 terraform apply
 ```
 
-### 3) Destroy compute while preserving S3 data
+Terraform provisions:
 
-With `preserve_data = true`, Terraform applies `prevent_destroy` on the data bucket.
+- Glue job for `transform_daily.py`
+- S3 script upload (`scripts/transform_daily.py`, `scripts/src_bundle.zip`)
+- EventBridge Scheduler daily trigger for Glue `StartJobRun`
+- Optional one-off backfill schedule with explicit `--run-date`
+- Glue Catalog + Athena resources
 
-To remove compute/orchestration/metadata resources while preserving data storage:
+### 3) Triggering behavior
+
+- Daily schedule starts Glue job with `--run-date AUTO` (script resolves to current UTC date)
+- One-off backfill schedule starts Glue job with `--run-date <backfill_run_date>`
+
+## Running one-day backfill manually
+
+Direct Glue CLI example:
 
 ```bash
-terraform destroy
+aws glue start-job-run \
+  --job-name <transform_glue_job_name> \
+  --arguments '{"--run-date":"2024-02-12"}'
 ```
 
-If you explicitly want data bucket deletion, set:
+Local development fallback:
 
-```hcl
-preserve_data = false
+```bash
+python src/transform_daily.py --run-date 2024-02-12 --source-uri ./data/source/*.parquet
 ```
 
-Then run `terraform apply` and `terraform destroy`.
+## Logging
+
+- Primary transform logs: AWS Glue job logs in CloudWatch
+- Operational run metadata: `pipeline_run_log` parquet table in S3/Athena (unchanged)
+
+## Idempotency
+
+- Re-running same date overwrites only Silver/Gold partitions for that date.
+- Unrelated dates are not rewritten.
+- External Bronze source is never modified.
 
 ## Glue and Athena tables
 
-- External Bronze table: `raw_external_smart_meter` (read-only source location)
+- External Bronze table: `raw_external_smart_meter`
 - Silver table: `silver_smart_meter_half_hourly_clean`
 - Gold tables:
   - `gold_peak_demand_substation_day`
   - `gold_avg_load_profile_day`
 - Run log table: `pipeline_run_log`
 
-## Athena querying
-
-```sql
-SELECT *
-FROM energy_smart_meter.gold_peak_demand_substation_day
-WHERE consumption_date = DATE '2024-02-12'
-ORDER BY peak_consumption DESC
-LIMIT 20;
-```
-
-```sql
-SELECT hour_of_day, minute_of_hour, avg_consumption
-FROM energy_smart_meter.gold_avg_load_profile_day
-WHERE consumption_date = DATE '2024-02-12'
-ORDER BY half_hour_slot;
-```
-
 ## QA checks for LLM/data QA agents
 
-SQL checks in `sql/qa_*.sql` are designed for agent-driven Athena execution and PASS/FAIL interpretation.
+QA SQL and run-log workflows are unchanged.
 
-Included validations:
+- Freshness, completeness, uniqueness, null, business-rule, and drift checks
+- Athena-executable `qa_*.sql` files
+- PASS/FAIL-friendly output structure
 
-- Freshness: data exists for `run_date`
-- Completeness: 48 half-hour slots and full timestamp coverage
-- Uniqueness: one row per key in each gold table
-- Nulls: required columns populated
-- Business + drift:
-  - `peak_consumption <= daily_total_consumption`
-  - `aggregated_device_count_active > 0`
-  - `total_consumption_active_import >= 0`
-  - `consumption_per_active_device >= 0`
-  - row count change <= 20% vs previous available date
-  - average consumption change <= 30% vs previous available date
+## Destroy compute while preserving data
 
-## Quick start
+With `preserve_data = true`, Terraform keeps the data bucket protected using `prevent_destroy`.
 
 ```bash
-python -m venv smart-meter-venv
-source smart-meter-venv/bin/activate
-pip install -e .[dev]
-
-export AWS_REGION=eu-west-2
-export SOURCE_URI=s3://weave.energy/smart-meter.parquet
-export S3_DATA_BUCKET=my-smart-meter-data-bucket
-export S3_DATA_PREFIX=portfolio
-export ATHENA_OUTPUT_S3_URI=s3://my-smart-meter-athena-results/athena-results/
-export GLUE_DATABASE=energy_smart_meter
-
-python src/load_source_data.py --run-date 2024-02-12
-python src/transform_daily.py --run-date 2024-02-12
-python src/run_qa_checks.py --run-date 2024-02-12
-python src/write_run_log.py --run-date 2024-02-12 --status SUCCESS
+terraform destroy
 ```
+
+This removes compute/orchestration/metadata resources while preserving stored parquet data.

@@ -1,4 +1,4 @@
-# Summary: EventBridge Scheduler resources for daily and optional one-off backfill pipeline execution.
+# Summary: EventBridge Scheduler resources to trigger the AWS Glue transform job daily and for one-off backfills.
 resource "aws_scheduler_schedule" "daily_pipeline" {
   name                         = "${local.name_prefix}-daily"
   group_name                   = "default"
@@ -11,10 +11,13 @@ resource "aws_scheduler_schedule" "daily_pipeline" {
   }
 
   target {
-    arn      = var.enable_step_functions ? aws_sfn_state_machine.pipeline[0].arn : var.pipeline_runner_lambda_arn
+    arn      = "arn:aws:scheduler:::aws-sdk:glue:startJobRun"
     role_arn = aws_iam_role.scheduler.arn
     input = jsonencode({
-      trigger = "daily-schedule"
+      JobName = aws_glue_job.transform_daily.name
+      Arguments = {
+        "--run-date" = "AUTO"
+      }
     })
   }
 }
@@ -31,11 +34,13 @@ resource "aws_scheduler_schedule" "one_off_backfill" {
   }
 
   target {
-    arn      = var.enable_step_functions ? aws_sfn_state_machine.pipeline[0].arn : var.pipeline_runner_lambda_arn
+    arn      = "arn:aws:scheduler:::aws-sdk:glue:startJobRun"
     role_arn = aws_iam_role.scheduler.arn
     input = jsonencode({
-      run_date = var.backfill_run_date
-      trigger  = "manual-backfill"
+      JobName = aws_glue_job.transform_daily.name
+      Arguments = {
+        "--run-date" = var.backfill_run_date
+      }
     })
   }
 }

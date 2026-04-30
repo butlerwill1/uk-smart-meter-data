@@ -1,24 +1,32 @@
-# Summary: S3 storage resources for persistent pipeline datasets and Athena query results.
-resource "aws_s3_bucket" "data" {
+# Summary: S3 storage resources for persistent pipeline datasets, Glue scripts, and Athena query results.
+resource "aws_s3_bucket" "data_preserved" {
+  count         = var.preserve_data ? 1 : 0
   bucket        = var.data_bucket_name
-  force_destroy = !var.preserve_data
+  force_destroy = false
 
   lifecycle {
-    prevent_destroy = var.preserve_data
+    prevent_destroy = true
   }
 
   tags = local.common_tags
 }
 
+resource "aws_s3_bucket" "data_ephemeral" {
+  count         = var.preserve_data ? 0 : 1
+  bucket        = var.data_bucket_name
+  force_destroy = true
+  tags          = local.common_tags
+}
+
 resource "aws_s3_bucket_versioning" "data" {
-  bucket = aws_s3_bucket.data.id
+  bucket = local.data_bucket_id
   versioning_configuration {
     status = "Enabled"
   }
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "data" {
-  bucket = aws_s3_bucket.data.id
+  bucket = local.data_bucket_id
 
   rule {
     apply_server_side_encryption_by_default {

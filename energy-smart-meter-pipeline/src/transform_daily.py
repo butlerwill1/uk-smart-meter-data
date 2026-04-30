@@ -291,7 +291,7 @@ def run_transform_spark(run_date: str, source_uri: str, silver_out: str, peak_ou
 
 def main() -> None:
     parser = build_parser("Transform smart meter half-hourly data into daily silver/gold tables")
-    args = parser.parse_args()
+    args, _unknown = parser.parse_known_args()
     cfg = load_config(args)
     run_date_str = cfg.run_date.isoformat()
 

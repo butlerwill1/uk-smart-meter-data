@@ -1,4 +1,4 @@
-# Summary: Shared utility helpers for Spark setup, S3 path handling, and metadata.
+# Summary: Shared utility helpers for Spark/Glue setup, S3 path handling, and metadata.
 from __future__ import annotations
 
 import json
@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
+from pyspark import SparkContext
 from pyspark.sql import SparkSession
 
 
@@ -49,11 +50,25 @@ def to_json(data: dict) -> str:
 
 
 def get_spark(app_name: str, aws_region: str | None = None) -> SparkSession:
-    builder = SparkSession.builder.appName(app_name)
-    builder = builder.config("spark.sql.session.timeZone", "UTC")
-    builder = builder.config("spark.sql.sources.partitionOverwriteMode", "dynamic")
-    if aws_region:
-        builder = builder.config("spark.hadoop.fs.s3a.aws.region", aws_region)
-    if os.getenv("SPARK_MASTER"):
-        builder = builder.master(os.getenv("SPARK_MASTER"))
-    return builder.getOrCreate()
+    # Prefer AWS Glue runtime when available, fall back to standard SparkSession for local development.
+    try:
+        from awsglue.context import GlueContext
+
+        sc = SparkContext.getOrCreate()
+        glue_context = GlueContext(sc)
+        spark = glue_context.spark_session
+        spark.sparkContext.setLogLevel(os.getenv("SPARK_LOG_LEVEL", "WARN"))
+        spark.conf.set("spark.sql.session.timeZone", "UTC")
+        spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+        if aws_region:
+            spark.conf.set("spark.hadoop.fs.s3a.aws.region", aws_region)
+        return spark
+    except Exception:
+        builder = SparkSession.builder.appName(app_name)
+        builder = builder.config("spark.sql.session.timeZone", "UTC")
+        builder = builder.config("spark.sql.sources.partitionOverwriteMode", "dynamic")
+        if aws_region:
+            builder = builder.config("spark.hadoop.fs.s3a.aws.region", aws_region)
+        if os.getenv("SPARK_MASTER"):
+            builder = builder.master(os.getenv("SPARK_MASTER"))
+        return builder.getOrCreate()

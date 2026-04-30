@@ -24,7 +24,7 @@ variable "external_source_s3_uri" {
 }
 
 variable "data_bucket_name" {
-  description = "S3 bucket name for silver/gold and run-log data"
+  description = "S3 bucket name for silver/gold, run-log data, and Glue scripts"
   type        = string
 }
 
@@ -63,40 +63,22 @@ variable "scheduler_timezone" {
   default     = "Europe/London"
 }
 
-variable "enable_step_functions" {
-  description = "If true, Scheduler triggers Step Functions instead of Lambda"
+variable "glue_worker_type" {
+  description = "Glue worker type for transform job"
+  type        = string
+  default     = "G.1X"
+}
+
+variable "glue_number_of_workers" {
+  description = "Number of workers for Glue transform job"
+  type        = number
+  default     = 2
+}
+
+variable "enable_step_functions_wrapper" {
+  description = "If true, create an optional Step Functions wrapper around the Glue job"
   type        = bool
-  default     = true
-}
-
-variable "pipeline_runner_lambda_arn" {
-  description = "Lambda ARN for pipeline execution when Step Functions is disabled"
-  type        = string
-  default     = ""
-}
-
-variable "load_source_lambda_arn" {
-  description = "Lambda ARN for source-loading step in Step Functions"
-  type        = string
-  default     = ""
-}
-
-variable "transform_lambda_arn" {
-  description = "Lambda ARN for transform step in Step Functions"
-  type        = string
-  default     = ""
-}
-
-variable "qa_lambda_arn" {
-  description = "Lambda ARN for QA step in Step Functions"
-  type        = string
-  default     = ""
-}
-
-variable "run_log_lambda_arn" {
-  description = "Lambda ARN for run-log writing step in Step Functions"
-  type        = string
-  default     = ""
+  default     = false
 }
 
 variable "enable_backfill_one_off" {
