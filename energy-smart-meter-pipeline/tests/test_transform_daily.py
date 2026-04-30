@@ -1,4 +1,12 @@
 # Summary: Unit tests for daily transformation logic and aggregate correctness.
+"""Tests for transformation logic.
+
+The test builds a tiny in-memory Spark dataset and verifies:
+- silver row count,
+- gold peak aggregation correctness,
+- gold load-profile slot aggregation correctness.
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -11,9 +19,11 @@ from transform_daily import build_gold_load_profile, build_gold_peak, build_silv
 
 
 def test_transform_builds_expected_aggregates() -> None:
+    """Validate key aggregate outputs on a small deterministic dataset."""
     try:
         spark = SparkSession.builder.master("local[1]").appName("test-transform-daily").getOrCreate()
     except PySparkRuntimeError as exc:
+        # Local Spark requires Java; skip gracefully in environments without it.
         if "JAVA_GATEWAY_EXITED" in str(exc):
             pytest.skip("Java runtime is required for local Spark tests")
         raise
@@ -58,6 +68,8 @@ def test_transform_builds_expected_aggregates() -> None:
     ]
 
     raw_df = spark.createDataFrame(data)
+
+    # Execute the same transformation functions used in the production pipeline.
     silver_df = build_silver(raw_df)
     peak_df = build_gold_peak(silver_df)
     profile_df = build_gold_load_profile(silver_df)

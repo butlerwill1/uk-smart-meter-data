@@ -1,4 +1,9 @@
 # Summary: IAM roles and policies for EventBridge Scheduler and AWS Glue job execution.
+# This file separates permissions by principal:
+# - scheduler role: can start Glue jobs.
+# - glue job role: can read source, write outputs, access catalog, emit logs.
+
+# Role assumed by EventBridge Scheduler.
 resource "aws_iam_role" "scheduler" {
   name = "${local.name_prefix}-scheduler-role"
 
@@ -18,6 +23,7 @@ resource "aws_iam_role" "scheduler" {
   tags = local.common_tags
 }
 
+# Scheduler permission to trigger the Glue transform job.
 resource "aws_iam_role_policy" "scheduler_start_glue" {
   name = "${local.name_prefix}-scheduler-start-glue"
   role = aws_iam_role.scheduler.id
@@ -34,6 +40,7 @@ resource "aws_iam_role_policy" "scheduler_start_glue" {
   })
 }
 
+# Execution role assumed by the AWS Glue service.
 resource "aws_iam_role" "glue_job" {
   name = "${local.name_prefix}-glue-job-role"
 
@@ -53,11 +60,13 @@ resource "aws_iam_role" "glue_job" {
   tags = local.common_tags
 }
 
+# Attach AWS managed Glue service policy baseline.
 resource "aws_iam_role_policy_attachment" "glue_service_role" {
   role       = aws_iam_role.glue_job.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole"
 }
 
+# Project-specific least-privilege policy for Glue job runtime.
 resource "aws_iam_role_policy" "glue_job_access" {
   name = "${local.name_prefix}-glue-job-access"
   role = aws_iam_role.glue_job.id

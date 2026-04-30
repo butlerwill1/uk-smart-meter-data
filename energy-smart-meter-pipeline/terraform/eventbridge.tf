@@ -1,4 +1,7 @@
 # Summary: EventBridge Scheduler resources to trigger the AWS Glue transform job daily and for one-off backfills.
+# Schedules in this file call AWS SDK action glue:startJobRun directly.
+
+# Daily schedule for regular pipeline runs.
 resource "aws_scheduler_schedule" "daily_pipeline" {
   name                         = "${local.name_prefix}-daily"
   group_name                   = "default"
@@ -7,12 +10,16 @@ resource "aws_scheduler_schedule" "daily_pipeline" {
   state                        = "ENABLED"
 
   flexible_time_window {
+    # Disable jitter so run timing is deterministic.
     mode = "OFF"
   }
 
   target {
+    # EventBridge Scheduler AWS SDK integration for Glue StartJobRun.
     arn      = "arn:aws:scheduler:::aws-sdk:glue:startJobRun"
     role_arn = aws_iam_role.scheduler.arn
+
+    # AUTO lets script resolve run-date at execution time.
     input = jsonencode({
       JobName = aws_glue_job.transform_daily.name
       Arguments = {
@@ -22,6 +29,7 @@ resource "aws_scheduler_schedule" "daily_pipeline" {
   }
 }
 
+# Optional one-off backfill schedule for historical date reprocessing.
 resource "aws_scheduler_schedule" "one_off_backfill" {
   count               = var.enable_backfill_one_off ? 1 : 0
   name                = "${local.name_prefix}-backfill-${replace(var.backfill_run_date, "-", "")}"
@@ -36,6 +44,8 @@ resource "aws_scheduler_schedule" "one_off_backfill" {
   target {
     arn      = "arn:aws:scheduler:::aws-sdk:glue:startJobRun"
     role_arn = aws_iam_role.scheduler.arn
+
+    # Explicit run-date for deterministic backfill execution.
     input = jsonencode({
       JobName = aws_glue_job.transform_daily.name
       Arguments = {

@@ -1,7 +1,11 @@
 # Summary: Glue Data Catalog database and external table metadata for Athena over S3 parquet data.
+# This file defines table schemas/locations for all queryable datasets in the pipeline.
+
+# Glue database that namespaces all project tables.
 resource "aws_glue_catalog_database" "energy" {
   name = var.glue_database_name
 
+  # Keep default table permissions simple for portfolio/demo environments.
   create_table_default_permission {
     permissions = ["SELECT"]
     principal {
@@ -10,6 +14,7 @@ resource "aws_glue_catalog_database" "energy" {
   }
 }
 
+# External read-only Bronze table mapped directly to source dataset.
 resource "aws_glue_catalog_table" "raw_external" {
   name          = "raw_external_smart_meter"
   database_name = aws_glue_catalog_database.energy.name
@@ -68,6 +73,7 @@ resource "aws_glue_catalog_table" "raw_external" {
   }
 }
 
+# Silver cleaned half-hourly table (partitioned by collection_date).
 resource "aws_glue_catalog_table" "silver" {
   name          = "silver_smart_meter_half_hourly_clean"
   database_name = aws_glue_catalog_database.energy.name
@@ -159,6 +165,7 @@ resource "aws_glue_catalog_table" "silver" {
   }
 }
 
+# Gold table: daily peak demand metrics by substation.
 resource "aws_glue_catalog_table" "gold_peak" {
   name          = "gold_peak_demand_substation_day"
   database_name = aws_glue_catalog_database.energy.name
@@ -222,6 +229,7 @@ resource "aws_glue_catalog_table" "gold_peak" {
   }
 }
 
+# Gold table: daily average load profile by half-hour slot.
 resource "aws_glue_catalog_table" "gold_profile" {
   name          = "gold_avg_load_profile_day"
   database_name = aws_glue_catalog_database.energy.name
@@ -285,6 +293,7 @@ resource "aws_glue_catalog_table" "gold_profile" {
   }
 }
 
+# Run log table: one row per pipeline execution, partitioned by run_date.
 resource "aws_glue_catalog_table" "run_log" {
   name          = "pipeline_run_log"
   database_name = aws_glue_catalog_database.energy.name

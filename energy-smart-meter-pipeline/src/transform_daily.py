@@ -1,4 +1,16 @@
 # Summary: Build silver and gold daily aggregates for smart meter half-hourly data.
+"""Daily transformation pipeline for smart meter data.
+
+This module transforms external Bronze input into:
+- Silver cleaned half-hourly dataset,
+- Gold peak-demand table by substation/day,
+- Gold average load profile table by half-hour slot/day.
+
+It supports:
+- AWS Glue/Spark execution (production path),
+- optional DuckDB execution (local fallback).
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,6 +25,8 @@ from utils import get_spark, partition_uri
 
 @dataclass
 class TransformCounts:
+    """Simple row-count metrics emitted after transformation."""
+
     raw_count: int
     silver_count: int
     peak_count: int
@@ -20,12 +34,14 @@ class TransformCounts:
 
 
 def build_silver(df: DataFrame) -> DataFrame:
+    """Construct silver table by deriving time and feeder-level fields."""
     ts_col = F.to_timestamp("data_collection_log_timestamp")
     return (
         df.withColumn("event_ts", ts_col)
         .withColumn("collection_date", F.to_date("event_ts"))
         .withColumn("hour_of_day", F.hour("event_ts"))
         .withColumn("minute_of_hour", F.minute("event_ts"))
+        # Convert HH:MM into a zero-based half-hour slot index (0..47).
         .withColumn("half_hour_slot", (F.col("hour_of_day") * F.lit(2)) + (F.col("minute_of_hour") / 30).cast("int"))
         .withColumn("day_of_week", F.date_format("event_ts", "E"))
         .withColumn("is_weekend", F.dayofweek("event_ts").isin(1, 7))
@@ -45,8 +61,10 @@ def build_silver(df: DataFrame) -> DataFrame:
 
 
 def build_gold_peak(silver_df: DataFrame) -> DataFrame:
+    """Aggregate daily peak and summary stats per substation."""
     key_cols = ["collection_date", "dno_alias", "secondary_substation_unique_id"]
 
+    # Rank rows so rank=1 is the peak timestamp for each grouping key.
     ranked = silver_df.withColumn(
         "peak_rank",
         F.row_number().over(
@@ -92,6 +110,7 @@ def build_gold_peak(silver_df: DataFrame) -> DataFrame:
 
 
 def build_gold_load_profile(silver_df: DataFrame) -> DataFrame:
+    """Aggregate average demand shape by half-hour slot for each day."""
     return (
         silver_df.groupBy("collection_date", "hour_of_day", "minute_of_hour", "half_hour_slot")
         .agg(
@@ -119,9 +138,12 @@ def build_gold_load_profile(silver_df: DataFrame) -> DataFrame:
 
 
 def _duckdb_transform(source_uri: str, run_date: str, silver_out: str, peak_out: str, profile_out: str) -> TransformCounts:
+    """Run equivalent transformations with DuckDB for local experimentation."""
     import duckdb
 
     con = duckdb.connect(database=":memory:")
+
+    # Filter source input to one processing day.
     con.execute(
         """
         CREATE TEMP TABLE source_run_date AS
@@ -132,6 +154,7 @@ def _duckdb_transform(source_uri: str, run_date: str, silver_out: str, peak_out:
         [source_uri, run_date],
     )
 
+    # Build silver table with derived time and normalization fields.
     con.execute(
         """
         CREATE TEMP TABLE silver AS
@@ -163,6 +186,7 @@ def _duckdb_transform(source_uri: str, run_date: str, silver_out: str, peak_out:
         [silver_out],
     )
 
+    # Build peak-demand gold table.
     con.execute(
         """
         CREATE TEMP TABLE gold_peak AS
@@ -221,6 +245,7 @@ def _duckdb_transform(source_uri: str, run_date: str, silver_out: str, peak_out:
         [peak_out],
     )
 
+    # Build load-profile gold table.
     con.execute(
         """
         CREATE TEMP TABLE gold_profile AS
@@ -260,6 +285,7 @@ def _duckdb_transform(source_uri: str, run_date: str, silver_out: str, peak_out:
 
 
 def run_transform_spark(run_date: str, source_uri: str, silver_out: str, peak_out: str, profile_out: str, region: str) -> TransformCounts:
+    """Run production Spark/Glue transformation path."""
     spark = get_spark("smart-meter-transform-daily", region)
 
     # External source dataset is the Bronze layer; filter by run_date at read time.
@@ -270,10 +296,12 @@ def run_transform_spark(run_date: str, source_uri: str, silver_out: str, peak_ou
         .drop("event_ts")
     )
 
+    # Build silver then both gold outputs from the same filtered dataset.
     silver_df = build_silver(filtered).cache()
     peak_df = build_gold_peak(silver_df)
     profile_df = build_gold_load_profile(silver_df)
 
+    # Idempotent per-date writes via partition-specific output paths.
     silver_df.write.mode("overwrite").format("parquet").save(silver_out)
     peak_df.write.mode("overwrite").format("parquet").save(peak_out)
     profile_df.write.mode("overwrite").format("parquet").save(profile_out)
@@ -290,7 +318,10 @@ def run_transform_spark(run_date: str, source_uri: str, silver_out: str, peak_ou
 
 
 def main() -> None:
+    """CLI entrypoint used by Glue job and local development runs."""
     parser = build_parser("Transform smart meter half-hourly data into daily silver/gold tables")
+
+    # parse_known_args lets Glue pass extra reserved arguments without failing.
     args, _unknown = parser.parse_known_args()
     cfg = load_config(args)
     run_date_str = cfg.run_date.isoformat()

@@ -1,4 +1,10 @@
 # Summary: Write one pipeline run-log record as parquet to S3 for Athena visibility.
+"""Persist operational run metadata as partitioned parquet.
+
+Each execution writes a single row into `pipeline_run_log`, partitioned by
+run_date, so execution history can be queried in Athena.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -15,8 +21,11 @@ from utils import new_run_id, parse_s3_uri
 
 
 def write_run_log_record(s3_uri: str, region: str, record: dict) -> str:
+    """Write one run-log record parquet object and return the S3 URI."""
     table = pa.Table.from_pylist([record])
     buf = io.BytesIO()
+
+    # Use Snappy for compact Athena-friendly parquet files.
     pq.write_table(table, buf, compression="snappy")
     buf.seek(0)
 
@@ -31,6 +40,7 @@ def write_run_log_record(s3_uri: str, region: str, record: dict) -> str:
 
 
 def main() -> None:
+    """CLI entrypoint for recording pipeline execution metadata."""
     parser = argparse.ArgumentParser(description="Write pipeline run log record")
     parser.add_argument("--run-date", required=True, help="Run date in YYYY-MM-DD")
     parser.add_argument("--status", required=True, choices=["SUCCESS", "FAILED"])
@@ -47,6 +57,7 @@ def main() -> None:
     cfg = load_config(args)
     now = datetime.now(timezone.utc).isoformat()
 
+    # Build a single normalized run-log row.
     record = {
         "run_id": new_run_id(),
         "pipeline_name": cfg.pipeline_name,

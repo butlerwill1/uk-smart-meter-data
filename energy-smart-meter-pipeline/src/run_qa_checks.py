@@ -1,4 +1,11 @@
 # Summary: Execute Athena SQL QA checks and emit pass/fail results for a run date.
+"""Athena QA runner for data quality checks.
+
+This module executes SQL checks from `sql/qa_*.sql`, waits for each query to
+finish, and returns structured status records that can be interpreted by
+automation or an LLM/data QA agent.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -10,6 +17,7 @@ import boto3
 from config import load_config
 
 
+# Central location for SQL QA templates.
 SQL_DIR = Path(__file__).resolve().parents[1] / "sql"
 
 
@@ -20,6 +28,7 @@ def start_and_wait_query(
     output_location: str,
     poll_seconds: int = 2,
 ) -> dict:
+    """Submit an Athena query and block until it reaches a terminal state."""
     response = athena_client.start_query_execution(
         QueryString=query,
         QueryExecutionContext={"Database": database},
@@ -36,11 +45,13 @@ def start_and_wait_query(
 
 
 def materialize_sql(sql_path: Path, run_date: str, database: str) -> str:
+    """Render an SQL template with runtime values."""
     text = sql_path.read_text(encoding="utf-8")
     return text.format(run_date=run_date, glue_database=database)
 
 
 def run_checks(run_date: str, region: str, database: str, output_location: str) -> list[dict]:
+    """Execute all configured QA checks and return per-check status details."""
     athena = boto3.client("athena", region_name=region)
     checks = [
         "qa_freshness.sql",
@@ -68,6 +79,7 @@ def run_checks(run_date: str, region: str, database: str, output_location: str) 
 
 
 def main() -> None:
+    """CLI entrypoint to run all QA checks for one run date."""
     parser = argparse.ArgumentParser(description="Run Athena QA checks for a run date")
     parser.add_argument("--run-date", required=True, help="Run date in YYYY-MM-DD")
     parser.add_argument("--local-engine", required=False, default="spark")
