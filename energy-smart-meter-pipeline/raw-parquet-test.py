@@ -5,6 +5,9 @@ This script prints:
 - schema
 - min/max timestamp date (derived from row-group statistics)
 - sample rows
+
+Download test file:
+    aws s3 cp s3://weave.energy/smart-meter.parquet ./smart-meter.parquet --no-sign-request
 """
 
 from __future__ import annotations

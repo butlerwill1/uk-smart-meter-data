@@ -48,7 +48,7 @@ resource "aws_glue_catalog_table" "raw_external" {
     }
     columns {
       name = "total_consumption_active_import"
-      type = "double"
+      type = "bigint"
     }
     columns {
       name = "data_collection_log_timestamp"
@@ -56,7 +56,7 @@ resource "aws_glue_catalog_table" "raw_external" {
     }
     columns {
       name = "geometry"
-      type = "string"
+      type = "struct<x:double,y:double>"
     }
     columns {
       name = "secondary_substation_unique_id"
@@ -68,7 +68,7 @@ resource "aws_glue_catalog_table" "raw_external" {
     }
     columns {
       name = "bbox"
-      type = "string"
+      type = "struct<xmin:double,ymin:double,xmax:double,ymax:double>"
     }
   }
 }
@@ -115,7 +115,7 @@ resource "aws_glue_catalog_table" "silver" {
     }
     columns {
       name = "geometry"
-      type = "string"
+      type = "struct<x:double,y:double>"
     }
     columns {
       name = "secondary_substation_unique_id"
@@ -127,7 +127,7 @@ resource "aws_glue_catalog_table" "silver" {
     }
     columns {
       name = "bbox"
-      type = "string"
+      type = "struct<xmin:double,ymin:double,xmax:double,ymax:double>"
     }
     columns {
       name = "hour_of_day"

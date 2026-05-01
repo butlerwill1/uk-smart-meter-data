@@ -43,7 +43,6 @@ class PipelineConfig:
     run_date: date
     code_version: str
     pipeline_name: str
-    use_duckdb: bool
 
     @property
     def silver_output_uri(self) -> str:
@@ -89,13 +88,6 @@ def build_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument("--athena-output-s3-uri", required=False, help="Athena output S3 URI")
     parser.add_argument("--pipeline-name", required=False, help="Pipeline name")
     parser.add_argument("--code-version", required=False, help="Code version")
-    parser.add_argument(
-        "--local-engine",
-        required=False,
-        choices=["spark", "duckdb"],
-        default="spark",
-        help="Use duckdb for small local runs, spark for AWS mode",
-    )
     return parser
 
 
@@ -128,5 +120,4 @@ def load_config(args: argparse.Namespace) -> PipelineConfig:
         run_date=run_date,
         code_version=_arg_or_env(getattr(args, "code_version", None), "CODE_VERSION", "dev"),
         pipeline_name=_arg_or_env(getattr(args, "pipeline_name", None), "PIPELINE_NAME", DEFAULT_PIPELINE_NAME),
-        use_duckdb=getattr(args, "local_engine", "spark") == "duckdb",
     )

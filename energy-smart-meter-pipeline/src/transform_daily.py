@@ -8,7 +8,7 @@ This module transforms external Bronze input into:
 
 It supports:
 - AWS Glue/Spark execution (production path),
-- optional DuckDB execution (local fallback).
+- local Spark execution for development and testing.
 """
 
 from __future__ import annotations
@@ -37,7 +37,9 @@ def build_silver(df: DataFrame) -> DataFrame:
     """Construct silver table by deriving time and feeder-level fields."""
     ts_col = F.to_timestamp("data_collection_log_timestamp")
     return (
-        df.withColumn("event_ts", ts_col)
+        # Normalize consumption type so Athena schema can stay consistent as DOUBLE.
+        df.withColumn("total_consumption_active_import", F.col("total_consumption_active_import").cast("double"))
+        .withColumn("event_ts", ts_col)
         .withColumn("collection_date", F.to_date("event_ts"))
         .withColumn("hour_of_day", F.hour("event_ts"))
         .withColumn("minute_of_hour", F.minute("event_ts"))
@@ -137,153 +139,6 @@ def build_gold_load_profile(silver_df: DataFrame) -> DataFrame:
     )
 
 
-def _duckdb_transform(source_uri: str, run_date: str, silver_out: str, peak_out: str, profile_out: str) -> TransformCounts:
-    """Run equivalent transformations with DuckDB for local experimentation."""
-    import duckdb
-
-    con = duckdb.connect(database=":memory:")
-
-    # Filter source input to one processing day.
-    con.execute(
-        """
-        CREATE TEMP TABLE source_run_date AS
-        SELECT *
-        FROM read_parquet(?)
-        WHERE CAST(data_collection_log_timestamp AS DATE) = CAST(? AS DATE)
-        """,
-        [source_uri, run_date],
-    )
-
-    # Build silver table with derived time and normalization fields.
-    con.execute(
-        """
-        CREATE TEMP TABLE silver AS
-        SELECT
-            *,
-            CAST(data_collection_log_timestamp AS DATE) AS collection_date,
-            EXTRACT(HOUR FROM data_collection_log_timestamp) AS hour_of_day,
-            EXTRACT(MINUTE FROM data_collection_log_timestamp) AS minute_of_hour,
-            (EXTRACT(HOUR FROM data_collection_log_timestamp) * 2)
-              + CAST(EXTRACT(MINUTE FROM data_collection_log_timestamp) / 30 AS INTEGER) AS half_hour_slot,
-            strftime(data_collection_log_timestamp, '%a') AS day_of_week,
-            CASE WHEN EXTRACT(DOW FROM data_collection_log_timestamp) IN (0, 6) THEN TRUE ELSE FALSE END AS is_weekend,
-            secondary_substation_unique_id || '-' || lv_feeder_unique_id AS composite_feeder_id,
-            CASE
-                WHEN aggregated_device_count_active > 0
-                THEN total_consumption_active_import / aggregated_device_count_active
-                ELSE NULL
-            END AS consumption_per_active_device
-        FROM source_run_date
-        """
-    )
-
-    con.execute(
-        """
-        COPY (
-            SELECT * FROM silver
-        ) TO ? (FORMAT PARQUET, OVERWRITE_OR_IGNORE TRUE)
-        """,
-        [silver_out],
-    )
-
-    # Build peak-demand gold table.
-    con.execute(
-        """
-        CREATE TEMP TABLE gold_peak AS
-        WITH ranked AS (
-            SELECT
-                collection_date,
-                dno_alias,
-                secondary_substation_unique_id,
-                total_consumption_active_import,
-                data_collection_log_timestamp,
-                ROW_NUMBER() OVER (
-                    PARTITION BY collection_date, dno_alias, secondary_substation_unique_id
-                    ORDER BY total_consumption_active_import DESC, data_collection_log_timestamp ASC
-                ) AS rn
-            FROM silver
-        ),
-        agg AS (
-            SELECT
-                collection_date,
-                dno_alias,
-                secondary_substation_unique_id,
-                SUM(total_consumption_active_import) AS daily_total_consumption,
-                AVG(total_consumption_active_import) AS avg_half_hour_consumption,
-                AVG(aggregated_device_count_active) AS avg_active_devices,
-                COUNT(DISTINCT composite_feeder_id) AS feeder_count,
-                COUNT(*) AS reading_count
-            FROM silver
-            GROUP BY 1,2,3
-        )
-        SELECT
-            agg.collection_date AS consumption_date,
-            agg.dno_alias,
-            agg.secondary_substation_unique_id,
-            ranked.total_consumption_active_import AS peak_consumption,
-            ranked.data_collection_log_timestamp AS peak_timestamp,
-            agg.daily_total_consumption,
-            agg.avg_half_hour_consumption,
-            agg.avg_active_devices,
-            agg.feeder_count,
-            agg.reading_count
-        FROM agg
-        LEFT JOIN ranked
-            ON agg.collection_date = ranked.collection_date
-           AND agg.dno_alias = ranked.dno_alias
-           AND agg.secondary_substation_unique_id = ranked.secondary_substation_unique_id
-           AND ranked.rn = 1
-        """
-    )
-
-    con.execute(
-        """
-        COPY (
-            SELECT * FROM gold_peak
-        ) TO ? (FORMAT PARQUET, OVERWRITE_OR_IGNORE TRUE)
-        """,
-        [peak_out],
-    )
-
-    # Build load-profile gold table.
-    con.execute(
-        """
-        CREATE TEMP TABLE gold_profile AS
-        SELECT
-            collection_date AS consumption_date,
-            hour_of_day,
-            minute_of_hour,
-            half_hour_slot,
-            AVG(total_consumption_active_import) AS avg_consumption,
-            SUM(total_consumption_active_import) AS total_consumption,
-            COUNT(*) AS reading_count,
-            COUNT(DISTINCT secondary_substation_unique_id) AS substation_count,
-            COUNT(DISTINCT composite_feeder_id) AS feeder_count,
-            AVG(consumption_per_active_device) AS avg_consumption_per_active_device
-        FROM silver
-        GROUP BY 1,2,3,4
-        """
-    )
-
-    con.execute(
-        """
-        COPY (
-            SELECT * FROM gold_profile
-        ) TO ? (FORMAT PARQUET, OVERWRITE_OR_IGNORE TRUE)
-        """,
-        [profile_out],
-    )
-
-    counts = TransformCounts(
-        raw_count=con.execute("SELECT COUNT(*) FROM source_run_date").fetchone()[0],
-        silver_count=con.execute("SELECT COUNT(*) FROM silver").fetchone()[0],
-        peak_count=con.execute("SELECT COUNT(*) FROM gold_peak").fetchone()[0],
-        load_profile_count=con.execute("SELECT COUNT(*) FROM gold_profile").fetchone()[0],
-    )
-    con.close()
-    return counts
-
-
 def run_transform_spark(run_date: str, source_uri: str, silver_out: str, peak_out: str, profile_out: str, region: str) -> TransformCounts:
     """Run production Spark/Glue transformation path."""
     spark = get_spark("smart-meter-transform-daily", region)
@@ -330,23 +185,14 @@ def main() -> None:
     peak_partition = partition_uri(cfg.gold_peak_output_uri, "consumption_date", run_date_str)
     profile_partition = partition_uri(cfg.gold_load_profile_output_uri, "consumption_date", run_date_str)
 
-    if cfg.use_duckdb:
-        counts = _duckdb_transform(
-            source_uri=cfg.source_uri,
-            run_date=run_date_str,
-            silver_out=silver_partition,
-            peak_out=peak_partition,
-            profile_out=profile_partition,
-        )
-    else:
-        counts = run_transform_spark(
-            run_date=run_date_str,
-            source_uri=cfg.source_uri,
-            silver_out=silver_partition,
-            peak_out=peak_partition,
-            profile_out=profile_partition,
-            region=cfg.aws_region,
-        )
+    counts = run_transform_spark(
+        run_date=run_date_str,
+        source_uri=cfg.source_uri,
+        silver_out=silver_partition,
+        peak_out=peak_partition,
+        profile_out=profile_partition,
+        region=cfg.aws_region,
+    )
 
     print(
         {

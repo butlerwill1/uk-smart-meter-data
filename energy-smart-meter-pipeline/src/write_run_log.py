@@ -51,7 +51,6 @@ def main() -> None:
     parser.add_argument("--peak-table-row-count", required=False, type=int, default=0)
     parser.add_argument("--load-profile-row-count", required=False, type=int, default=0)
     parser.add_argument("--error-message", required=False, default="")
-    parser.add_argument("--local-engine", required=False, default="spark")
     args = parser.parse_args()
 
     cfg = load_config(args)

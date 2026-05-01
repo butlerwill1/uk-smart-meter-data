@@ -82,7 +82,6 @@ def main() -> None:
     """CLI entrypoint to run all QA checks for one run date."""
     parser = argparse.ArgumentParser(description="Run Athena QA checks for a run date")
     parser.add_argument("--run-date", required=True, help="Run date in YYYY-MM-DD")
-    parser.add_argument("--local-engine", required=False, default="spark")
     args = parser.parse_args()
     cfg = load_config(args)
 
