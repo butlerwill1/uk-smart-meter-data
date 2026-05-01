@@ -124,3 +124,33 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+# Lake Formation principals (IAM user/role ARNs) that should be able to query tables.
+# Example: ["arn:aws:iam::123456789012:role/Admin"]
+variable "lakeformation_principal_arns" {
+  description = "List of IAM principal ARNs to grant Lake Formation permissions"
+  type        = list(string)
+  default     = []
+}
+
+# Whether to grant DATA_LOCATION_ACCESS on S3 locations used by this pipeline.
+variable "enable_lakeformation_data_location_permissions" {
+  description = "Grant Lake Formation data location permissions for configured principals"
+  type        = bool
+  default     = true
+}
+
+# Whether Terraform should register S3 locations in Lake Formation.
+# Keep false if your org already manages registrations centrally.
+variable "enable_lakeformation_register_resources" {
+  description = "Register pipeline S3 locations as Lake Formation resources"
+  type        = bool
+  default     = false
+}
+
+# Automatically include the current Terraform caller principal in Lake Formation grants.
+variable "enable_lakeformation_auto_grant_current_principal" {
+  description = "Auto-grant Lake Formation permissions to the current AWS caller principal"
+  type        = bool
+  default     = true
+}

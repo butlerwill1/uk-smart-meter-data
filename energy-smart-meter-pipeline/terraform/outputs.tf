@@ -48,3 +48,15 @@ output "daily_schedule_name" {
   value       = aws_scheduler_schedule.daily_pipeline.name
   description = "EventBridge Scheduler daily schedule name"
 }
+
+# Resolved Lake Formation principal ARNs that will receive permissions.
+output "lakeformation_effective_principals" {
+  value       = local.lakeformation_effective_principals
+  description = "Effective Lake Formation principals (explicit + optional auto-detected caller)"
+}
+
+# Normalized current caller IAM principal ARN used for auto-grants.
+output "current_caller_iam_principal_arn" {
+  value       = local.caller_iam_principal_arn
+  description = "Current Terraform caller principal normalized to IAM ARN"
+}

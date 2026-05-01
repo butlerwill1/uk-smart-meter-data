@@ -2,3 +2,10 @@
 *xlsx
 smart-meter-venv
 *.pyc
+*.zip
+*.parquet
+*.tfstate
+*.backup
+*DS_Store
+terraform-provider*
+LICENSE.txt

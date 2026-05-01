@@ -62,6 +62,17 @@ locals {
   external_source_no_scheme = trimprefix(var.external_source_s3_uri, "s3://")
   external_source_parts     = split("/", local.external_source_no_scheme)
   external_source_bucket    = local.external_source_parts[0]
+
+
+  # Current caller ARN from STS (may be assumed-role ARN).
+  caller_principal_arn = data.aws_caller_identity.current.arn
+
+  # Normalize STS assumed-role ARN to IAM role ARN for Lake Formation grants.
+  caller_iam_principal_arn = can(regex(":assumed-role/", local.caller_principal_arn)) ? regexreplace(
+    local.caller_principal_arn,
+    "^arn:aws:sts::([0-9]+):assumed-role/(.+)/[^/]+$",
+    "arn:aws:iam::$1:role/$2",
+  ) : local.caller_principal_arn
 }
 
 # Current AWS account metadata for future extension and debugging.
