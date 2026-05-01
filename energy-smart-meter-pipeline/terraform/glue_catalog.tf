@@ -80,7 +80,14 @@ resource "aws_glue_catalog_table" "silver" {
   table_type    = "EXTERNAL_TABLE"
 
   parameters = {
-    EXTERNAL = "TRUE"
+    EXTERNAL                                   = "TRUE"
+    "projection.enabled"                       = "true"
+    "projection.collection_date.type"          = "date"
+    "projection.collection_date.format"        = "yyyy-MM-dd"
+    "projection.collection_date.range"         = "2024-01-01,NOW"
+    "projection.collection_date.interval"      = "1"
+    "projection.collection_date.interval.unit" = "DAYS"
+    "storage.location.template"                = "${local.silver_location}collection_date=$${collection_date}/"
   }
 
   storage_descriptor {
@@ -172,7 +179,14 @@ resource "aws_glue_catalog_table" "gold_peak" {
   table_type    = "EXTERNAL_TABLE"
 
   parameters = {
-    EXTERNAL = "TRUE"
+    EXTERNAL                                    = "TRUE"
+    "projection.enabled"                        = "true"
+    "projection.consumption_date.type"          = "date"
+    "projection.consumption_date.format"        = "yyyy-MM-dd"
+    "projection.consumption_date.range"         = "2024-01-01,NOW"
+    "projection.consumption_date.interval"      = "1"
+    "projection.consumption_date.interval.unit" = "DAYS"
+    "storage.location.template"                 = "${local.gold_peak_location}consumption_date=$${consumption_date}/"
   }
 
   storage_descriptor {
@@ -236,7 +250,14 @@ resource "aws_glue_catalog_table" "gold_profile" {
   table_type    = "EXTERNAL_TABLE"
 
   parameters = {
-    EXTERNAL = "TRUE"
+    EXTERNAL                                    = "TRUE"
+    "projection.enabled"                        = "true"
+    "projection.consumption_date.type"          = "date"
+    "projection.consumption_date.format"        = "yyyy-MM-dd"
+    "projection.consumption_date.range"         = "2024-01-01,NOW"
+    "projection.consumption_date.interval"      = "1"
+    "projection.consumption_date.interval.unit" = "DAYS"
+    "storage.location.template"                 = "${local.gold_profile_location}consumption_date=$${consumption_date}/"
   }
 
   storage_descriptor {
@@ -300,7 +321,14 @@ resource "aws_glue_catalog_table" "run_log" {
   table_type    = "EXTERNAL_TABLE"
 
   parameters = {
-    EXTERNAL = "TRUE"
+    EXTERNAL                            = "TRUE"
+    "projection.enabled"                = "true"
+    "projection.run_date.type"          = "date"
+    "projection.run_date.format"        = "yyyy-MM-dd"
+    "projection.run_date.range"         = "2024-01-01,NOW"
+    "projection.run_date.interval"      = "1"
+    "projection.run_date.interval.unit" = "DAYS"
+    "storage.location.template"         = "${local.run_log_location}run_date=$${run_date}/"
   }
 
   storage_descriptor {
