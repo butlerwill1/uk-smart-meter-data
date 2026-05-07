@@ -69,6 +69,13 @@ variable "daily_schedule_expression" {
   default     = "cron(0 2 * * ? *)"
 }
 
+# Toggle for enabling/disabling the daily scheduler trigger without deleting the Glue job.
+variable "enable_daily_schedule" {
+  description = "When true, enable the daily EventBridge Scheduler trigger for the Glue job"
+  type        = bool
+  default     = true
+}
+
 # Timezone for EventBridge schedule evaluation.
 variable "scheduler_timezone" {
   description = "Timezone for EventBridge Scheduler"

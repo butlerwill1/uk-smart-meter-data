@@ -7,7 +7,7 @@ resource "aws_scheduler_schedule" "daily_pipeline" {
   group_name                   = "default"
   schedule_expression          = var.daily_schedule_expression
   schedule_expression_timezone = var.scheduler_timezone
-  state                        = "ENABLED"
+  state                        = var.enable_daily_schedule ? "ENABLED" : "DISABLED"
 
   flexible_time_window {
     # Disable jitter so run timing is deterministic.
