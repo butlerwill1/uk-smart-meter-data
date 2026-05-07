@@ -27,12 +27,15 @@ Components:
 - Partition projection is enabled on Silver/Gold/Run Log tables to avoid manual partition repair.
 - Data bucket can be preserved during teardown (`preserve_data = true`).
 
-## Repo layout
+## Repo Layout
 
 ```text
 energy-smart-meter-pipeline/
 ├── README.md
 ├── pyproject.toml
+├── eda/
+│   ├── pandas-eda.ipynb
+│   └── pyspark.ipynb
 ├── src/
 │   ├── config.py
 │   ├── transform_daily.py
