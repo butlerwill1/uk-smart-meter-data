@@ -30,9 +30,11 @@ Components:
 ## Repo Layout
 
 ```text
-energy-smart-meter-pipeline/
+uk-smart-meter-data/
 ├── README.md
 ├── pyproject.toml
+├── raw-parquet-test.py
+├── silver-parquet-test.py
 ├── eda/
 │   ├── pandas-eda.ipynb
 │   └── pyspark.ipynb
@@ -108,11 +110,11 @@ Run log table:
 
 ## Local Python setup
 
-From `energy-smart-meter-pipeline/`:
+From `uk-smart-meter-data/`:
 
 ```bash
-python3.11 -m venv ../smart-meter-venv
-source ../smart-meter-venv/bin/activate
+python3.11 -m venv smart-meter-venv
+source smart-meter-venv/bin/activate
 pip install -e .
 ```
 
