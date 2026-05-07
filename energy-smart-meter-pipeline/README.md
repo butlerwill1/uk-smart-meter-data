@@ -1,46 +1,70 @@
-<!-- Summary: Portfolio-ready AWS data pipeline for UK smart meter half-hourly consumption analytics with AWS Glue execution. -->
+<!-- Summary: AWS-native UK smart meter pipeline with external Bronze, Glue transforms, Athena querying, and Terraform-managed infrastructure. -->
 # Energy Smart Meter Pipeline
 
-A portfolio-ready AWS-native data engineering project for UK smart meter half-hourly consumption data.
+Portfolio-ready AWS data engineering project for UK smart meter half-hourly consumption data.
 
-The pipeline treats an external source dataset as the Bronze layer (read-only), runs PySpark transformations in AWS Glue jobs, writes Silver and Gold parquet data to your S3 bucket, exposes data through Glue Catalog and Athena, and keeps QA/run-log workflows for agent-driven validation.
-
-## Why this project is useful
-
-- Uses AWS Glue jobs for serverless PySpark execution.
-- Uses EventBridge Scheduler to trigger Glue directly (daily and one-off backfills).
-- Avoids copying Bronze data, reducing storage cost and complexity.
-- Uses Glue + Athena over S3 parquet for a realistic analytics pattern.
-- Preserves idempotent daily processing by overwriting only target date partitions.
-
-## Execution environment for PySpark
-
-PySpark transformations run in **AWS Glue** (production target).
-
-- Main transform script: `src/transform_daily.py`
-- Uploaded by Terraform to:
-  - `s3://<data_bucket>/scripts/transform_daily.py`
-- Glue job runs that script using Glue Spark runtime and writes Silver/Gold partitions to your data bucket.
-- Script accepts `--run-date YYYY-MM-DD`.
-
-Local fallback remains available for development with standard `SparkSession.builder`.
+The pipeline reads an external Bronze dataset, transforms it with AWS Glue (PySpark), writes Silver/Gold parquet to S3, exposes tables through Glue Catalog + Athena, and runs SQL QA checks.
 
 ## Architecture
 
-- Bronze: external read-only parquet dataset (example: `s3://weave.energy/smart-meter.parquet`)
-- Transform compute: AWS Glue job (`transform_daily`)
-- Silver/Gold/Run Log storage: S3 parquet in your data bucket
-- Metadata: AWS Glue Data Catalog external tables
-- Query engine: Athena
-- Scheduling: EventBridge Scheduler -> Glue `StartJobRun`
-- Optional orchestration visibility: Step Functions wrapper around Glue job (disabled by default)
-- Infrastructure as code: Terraform
+`External S3 Bronze (read-only) -> Glue PySpark transform -> S3 Silver/Gold -> Glue Catalog -> Athena`
 
-Pipeline:
+Components:
 
-`External Source (Bronze) -> AWS Glue PySpark Transform -> Silver -> Gold -> QA checks -> Run log`
+- `S3` for Silver, Gold, and run-log parquet data
+- `AWS Glue Job` for PySpark transformations
+- `AWS Glue Data Catalog` for table metadata
+- `Athena` for querying and QA SQL checks
+- `EventBridge Scheduler` to trigger Glue jobs
+- `Lake Formation` for data permissions
+- `Terraform` for infra-as-code
 
-## Dataset shape
+## Key design choices
+
+- Bronze is external and read-only (`s3://weave.energy/smart-meter.parquet` by default).
+- No copied internal Bronze layer.
+- Glue job is kept defined, but daily schedule can be disabled to reduce cost.
+- Partition projection is enabled on Silver/Gold/Run Log tables to avoid manual partition repair.
+- Data bucket can be preserved during teardown (`preserve_data = true`).
+
+## Repo layout
+
+```text
+energy-smart-meter-pipeline/
+├── README.md
+├── pyproject.toml
+├── src/
+│   ├── config.py
+│   ├── transform_daily.py
+│   ├── run_qa_checks.py
+│   ├── write_run_log.py
+│   ├── backfill_glue_range.py
+│   ├── load_source_data.py
+│   └── utils.py
+├── sql/
+│   ├── qa_freshness.sql
+│   ├── qa_completeness.sql
+│   ├── qa_uniqueness.sql
+│   ├── qa_nulls.sql
+│   └── qa_business_rules.sql
+├── tests/
+│   └── test_transform_daily.py
+└── terraform/
+    ├── main.tf
+    ├── variables.tf
+    ├── terraform.tfvars
+    ├── s3.tf
+    ├── glue_catalog.tf
+    ├── glue_job.tf
+    ├── iam.tf
+    ├── athena.tf
+    ├── eventbridge.tf
+    ├── lakeformation.tf
+    ├── step_functions.tf
+    └── outputs.tf
+```
+
+## Dataset schema
 
 Expected source columns:
 
@@ -54,148 +78,192 @@ Expected source columns:
 - `lv_feeder_unique_id`
 - `bbox`
 
-## Assumptions
+## Outputs
 
-- External Bronze dataset is stable and accessible from your AWS account/network context.
-- Bronze is read-only and never modified by this pipeline.
+Silver table:
 
-## Project layout
+- `silver_smart_meter_half_hourly_clean`
+- partition key: `collection_date`
 
-```text
-energy-smart-meter-pipeline/
-├── README.md
-├── terraform/
-│   ├── main.tf
-│   ├── variables.tf
-│   ├── outputs.tf
-│   ├── s3.tf
-│   ├── glue_catalog.tf
-│   ├── glue_job.tf
-│   ├── athena.tf
-│   ├── iam.tf
-│   ├── eventbridge.tf
-│   └── step_functions.tf
-├── src/
-│   ├── config.py
-│   ├── load_source_data.py
-│   ├── transform_daily.py
-│   ├── run_qa_checks.py
-│   ├── write_run_log.py
-│   └── utils.py
-├── sql/
-│   ├── create_raw_table.sql
-│   ├── create_gold_peak_demand_substation_day.sql
-│   ├── create_gold_avg_load_profile_day.sql
-│   ├── qa_freshness.sql
-│   ├── qa_uniqueness.sql
-│   ├── qa_completeness.sql
-│   ├── qa_nulls.sql
-│   └── qa_business_rules.sql
-├── tests/
-│   └── test_transform_daily.py
-└── pyproject.toml
-```
+Gold tables:
 
-## Terraform deployment
+- `gold_peak_demand_substation_day`
+- `gold_avg_load_profile_day`
+- partition key: `consumption_date`
 
-### 1) Configure variables
+Run log table:
 
-Create `terraform.tfvars` in `terraform/`:
+- `pipeline_run_log`
+- partition key: `run_date`
 
-```hcl
-aws_region                 = "eu-west-2"
-project_name               = "energy-smart-meter-pipeline"
-environment                = "dev"
-external_source_s3_uri     = "s3://weave.energy/smart-meter.parquet"
-data_bucket_name           = "my-smart-meter-data-bucket"
-athena_results_bucket_name = "my-smart-meter-athena-results"
-data_prefix                = "portfolio"
-preserve_data              = true
+## Prerequisites
 
-glue_worker_type           = "G.1X"
-glue_number_of_workers     = 2
-enable_step_functions_wrapper = false
+- Python `3.11`
+- Terraform `>= 1.5`
+- AWS CLI configured (`default` profile or your chosen profile)
+- Permissions for S3, Glue, Athena, EventBridge, IAM, and Lake Formation
 
-daily_schedule_expression  = "cron(0 2 * * ? *)"
-scheduler_timezone         = "Europe/London"
+## Local Python setup
 
-enable_backfill_one_off      = false
-backfill_schedule_expression = "at(2026-01-15T01:00:00)"
-backfill_run_date            = "2026-01-14"
-```
-
-### 2) Apply
+From `energy-smart-meter-pipeline/`:
 
 ```bash
-cd terraform
+python3.11 -m venv ../smart-meter-venv
+source ../smart-meter-venv/bin/activate
+pip install -e .
+```
+
+## Terraform configuration
+
+Edit `terraform/terraform.tfvars`.
+
+Important fields:
+
+- `data_bucket_name`
+- `athena_results_bucket_name`
+- `external_source_s3_uri`
+- `preserve_data`
+- `enable_daily_schedule`
+- `tags`
+
+Example tags for cost attribution:
+
+```hcl
+tags = {
+  Workload  = "uk-smart-meter"
+  CostScope = "portfolio"
+  CostOwner = "will"
+}
+```
+
+Enable those tag keys in AWS Billing as cost allocation tags so they appear in Cost Explorer.
+
+## Deploy
+
+From `terraform/`:
+
+```bash
 terraform init
 terraform plan
 terraform apply
 ```
 
-Terraform provisions:
+## Run pipeline manually
 
-- Glue job for `transform_daily.py`
-- S3 script upload (`scripts/transform_daily.py`, `scripts/src_bundle.zip`)
-- EventBridge Scheduler daily trigger for Glue `StartJobRun`
-- Optional one-off backfill schedule with explicit `--run-date`
-- Glue Catalog + Athena resources
-
-### 3) Triggering behavior
-
-- Daily schedule starts Glue job with `--run-date AUTO` (script resolves to current UTC date)
-- One-off backfill schedule starts Glue job with `--run-date <backfill_run_date>`
-
-## Running one-day backfill manually
-
-Direct Glue CLI example:
+Start one Glue run for a specific date:
 
 ```bash
 aws glue start-job-run \
-  --job-name <transform_glue_job_name> \
-  --arguments '{"--run-date":"2024-02-12"}'
+  --job-name energy-smart-meter-pipeline-dev-transform-daily \
+  --arguments '{"--run-date":"2024-02-02"}'
 ```
 
-Local development fallback:
+Backfill a date range sequentially (waits for each run to finish):
 
 ```bash
-python src/transform_daily.py --run-date 2024-02-12 --source-uri ./data/source/*.parquet
+python src/backfill_glue_range.py \
+  --job-name energy-smart-meter-pipeline-dev-transform-daily \
+  --start-date 2024-02-01 \
+  --end-date 2024-02-29
 ```
 
-## Logging
+## Query with Athena
 
-- Primary transform logs: AWS Glue job logs in CloudWatch
-- Operational run metadata: `pipeline_run_log` parquet table in S3/Athena (unchanged)
+Example:
 
-## Idempotency
+```sql
+SELECT collection_date, COUNT(*) AS row_count
+FROM energy_smart_meter.silver_smart_meter_half_hourly_clean
+WHERE collection_date = DATE '2024-02-02'
+GROUP BY 1;
+```
 
-- Re-running same date overwrites only Silver/Gold partitions for that date.
-- Unrelated dates are not rewritten.
-- External Bronze source is never modified.
+Notes:
 
-## Glue and Athena tables
+- Partition projection is enabled, so you should not need `MSCK REPAIR TABLE` for projected tables.
+- If queries fail on column access, check Lake Formation table and column permissions.
 
-- External Bronze table: `raw_external_smart_meter`
-- Silver table: `silver_smart_meter_half_hourly_clean`
-- Gold tables:
-  - `gold_peak_demand_substation_day`
-  - `gold_avg_load_profile_day`
-- Run log table: `pipeline_run_log`
+## QA checks
 
-## QA checks for LLM/data QA agents
+SQL checks are in `sql/qa_*.sql` and include:
 
-QA SQL and run-log workflows are unchanged.
+- Freshness
+- Completeness
+- Uniqueness
+- Null checks
+- Business rules and drift checks
 
-- Freshness, completeness, uniqueness, null, business-rule, and drift checks
-- Athena-executable `qa_*.sql` files
-- PASS/FAIL-friendly output structure
-
-## Destroy compute while preserving data
-
-With `preserve_data = true`, Terraform keeps the data bucket protected using `prevent_destroy`.
+Run QA script:
 
 ```bash
+python src/run_qa_checks.py --run-date 2024-02-02
+```
+
+## Cost profile
+
+Expected ongoing costs when daily schedule is disabled:
+
+- Low baseline cost for S3 storage, Glue Catalog metadata, and Lake Formation definitions.
+- Athena costs only when queries run (pay per data scanned).
+- Glue ETL cost only when Glue jobs are executed.
+
+For low-cost portfolio mode:
+
+- Keep `enable_daily_schedule = false`
+- Run Glue manually only for backfills/demo dates
+- Query curated Silver/Gold subsets in Athena
+
+## Disable daily runs while keeping Glue job
+
+Set in `terraform.tfvars`:
+
+```hcl
+enable_daily_schedule = false
+```
+
+Apply:
+
+```bash
+cd terraform
+terraform apply
+```
+
+This keeps the Glue job resource available but disables automatic daily triggering.
+
+## Destroy infra but preserve data bucket
+
+If `preserve_data = true`, data bucket has `prevent_destroy` and is intentionally protected.
+
+To tear down compute/metadata while keeping data, remove protected bucket resources from state, then destroy:
+
+```bash
+terraform state rm 'aws_s3_bucket.data_preserved[0]' \
+  'aws_s3_bucket_versioning.data' \
+  'aws_s3_bucket_server_side_encryption_configuration.data'
+
 terraform destroy
 ```
 
-This removes compute/orchestration/metadata resources while preserving stored parquet data.
+## Troubleshooting
+
+`EntityNotFoundException` on `start-job-run`:
+
+- Verify Glue job name from Terraform outputs.
+
+`ConcurrentRunsExceededException`:
+
+- Wait for prior job completion or use `backfill_glue_range.py` sequential mode.
+
+Athena returns zero rows but files exist:
+
+- Verify table `LOCATION` and partition path template.
+- Verify date filter matches partition key and format.
+
+`COLUMN_NOT_FOUND ... cannot be resolved or requester is not authorized`:
+
+- This is usually Lake Formation permissions, not missing columns in file schema.
+- Check table `SELECT`, `DESCRIBE`, and column wildcard grants for the querying principal.
+
+`AccessDeniedException Required Alter/Drop` during Terraform apply/destroy:
+
+- Grant required Lake Formation table permissions (`ALTER`, `DROP`) for the Terraform principal.
