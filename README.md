@@ -45,13 +45,27 @@ uk-smart-meter-data/
 │   ├── write_run_log.py
 │   ├── backfill_glue_range.py
 │   ├── load_source_data.py
+│   ├── athena_utils.py
+│   ├── athena_cli.py
+│   ├── gold_insights.py
 │   └── utils.py
 ├── sql/
 │   ├── qa_freshness.sql
 │   ├── qa_completeness.sql
 │   ├── qa_uniqueness.sql
 │   ├── qa_nulls.sql
-│   └── qa_business_rules.sql
+│   ├── qa_business_rules.sql
+│   └── insights/
+│       ├── 01_date_coverage.sql
+│       ├── 02_top_substations_by_total.sql
+│       ├── 03_system_peak_day.sql
+│       ├── 04_avg_load_shape_peak_trough.sql
+│       ├── 05_weekday_weekend_profile.sql
+│       ├── 06_substation_concentration.sql
+│       ├── 07_peak_window_concentration.sql
+│       ├── 08_day_total_volatility.sql
+│       ├── 09_evening_ramp_weekday_vs_weekend.sql
+│       └── 10_dno_outlier_screen.sql
 ├── tests/
 │   └── test_transform_daily.py
 └── terraform/
@@ -187,6 +201,47 @@ Notes:
 
 - Partition projection is enabled, so you should not need `MSCK REPAIR TABLE` for projected tables.
 - If queries fail on column access, check Lake Formation table and column permissions.
+
+## Mini Athena CLI
+
+Run any SQL file or inline query via Athena:
+
+```bash
+python src/athena_cli.py \
+  --sql-file sql/insights/01_date_coverage.sql \
+  --database energy_smart_meter \
+  --workgroup energy-smart-meter-pipeline-dev-athena \
+  --output-s3-uri s3://smart-meter-athena-results/athena-results/ \
+  --aws-region eu-west-2
+```
+
+Inline query example:
+
+```bash
+python src/athena_cli.py \
+  --query "SELECT COUNT(*) AS c FROM energy_smart_meter.gold_peak_demand_substation_day" \
+  --database energy_smart_meter \
+  --workgroup energy-smart-meter-pipeline-dev-athena \
+  --output-s3-uri s3://smart-meter-athena-results/athena-results/ \
+  --aws-region eu-west-2
+```
+
+Optional:
+
+- `--max-rows 200` to control terminal output size
+- `--save-json out.json` to export query results
+
+## Gold Table Insights Runner
+
+Run curated portfolio insight queries from `sql/insights/` and print synthesized findings:
+
+```bash
+python src/gold_insights.py \
+  --database energy_smart_meter \
+  --workgroup energy-smart-meter-pipeline-dev-athena \
+  --output-s3-uri s3://smart-meter-athena-results/athena-results/ \
+  --aws-region eu-west-2
+```
 
 ## QA checks
 
