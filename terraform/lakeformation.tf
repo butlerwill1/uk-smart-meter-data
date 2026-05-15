@@ -53,7 +53,7 @@ resource "aws_lakeformation_resource" "s3_location" {
 
 # Database-level DESCRIBE permission allows principals to browse database metadata.
 resource "aws_lakeformation_permissions" "database_describe" {
-  for_each = local.lakeformation_effective_principals
+  for_each = length(local.lakeformation_effective_principals) > 0 ? local.lakeformation_effective_principals : toset([])
 
   principal   = each.value
   permissions = ["DESCRIBE"]
@@ -66,7 +66,7 @@ resource "aws_lakeformation_permissions" "database_describe" {
 
 # Table-level SELECT/DESCRIBE permissions allow query execution in Athena.
 resource "aws_lakeformation_permissions" "table_select_describe" {
-  for_each = local.lakeformation_table_grants
+  for_each = length(local.lakeformation_effective_principals) > 0 ? local.lakeformation_table_grants : {}
 
   principal   = each.value.principal
   permissions = ["SELECT", "DESCRIBE"]
@@ -80,7 +80,7 @@ resource "aws_lakeformation_permissions" "table_select_describe" {
 
 # Optional data-location permissions for S3 buckets used by source/results datasets.
 resource "aws_lakeformation_permissions" "data_location_access" {
-  for_each = var.enable_lakeformation_data_location_permissions ? local.lakeformation_location_grants : {}
+  for_each = var.enable_lakeformation_data_location_permissions && length(local.lakeformation_effective_principals) > 0 ? local.lakeformation_location_grants : {}
 
   principal   = each.value.principal
   permissions = ["DATA_LOCATION_ACCESS"]

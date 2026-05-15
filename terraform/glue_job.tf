@@ -62,6 +62,7 @@ resource "aws_glue_job" "transform_daily" {
     "--s3-data-bucket"                   = var.data_bucket_name
     "--s3-data-prefix"                   = var.data_prefix
     "--aws-region"                       = var.aws_region
+    "--zscore-threshold"                 = "3.0"
     "--extra-py-files"                   = "s3://${aws_s3_object.src_bundle.bucket}/${aws_s3_object.src_bundle.key}"
     "--TempDir"                          = "s3://${var.data_bucket_name}/scripts/tmp/"
   }

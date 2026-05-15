@@ -14,6 +14,7 @@ It supports:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 from pyspark.sql import DataFrame
 from pyspark.sql import Window
@@ -139,22 +140,112 @@ def build_gold_load_profile(silver_df: DataFrame) -> DataFrame:
     )
 
 
-def run_transform_spark(run_date: str, source_uri: str, silver_out: str, peak_out: str, profile_out: str, region: str) -> TransformCounts:
-    """Run production Spark/Glue transformation path."""
-    spark = get_spark("smart-meter-transform-daily", region)
-
-    # External source dataset is the Bronze layer; filter by run_date at read time.
-    filtered = (
-        spark.read.parquet(source_uri)
-        .withColumn("event_ts", F.to_timestamp("data_collection_log_timestamp"))
-        .filter(F.to_date("event_ts") == F.lit(run_date))
-        .drop("event_ts")
+def apply_zscore_quality_flag(
+    current_silver_df: DataFrame,
+    baseline_silver_df: DataFrame,
+    *,
+    threshold: float,
+    min_history_rows: int,
+) -> DataFrame:
+    """Apply hybrid quality policy: drop invalid rows, clip z-score outliers, keep remainder."""
+    # Build anomaly baseline at feeder level (not feeder+slot) to smooth out
+    # slot-specific spikes and produce a more stable clipping cap.
+    baseline = baseline_silver_df.groupBy("composite_feeder_id").agg(
+        F.avg("total_consumption_active_import").alias("zscore_mean"),
+        F.stddev_pop("total_consumption_active_import").alias("zscore_stddev"),
+        F.count(F.lit(1)).alias("zscore_history_count"),
     )
 
-    # Build silver then both gold outputs from the same filtered dataset.
-    silver_df = build_silver(filtered).cache()
-    peak_df = build_gold_peak(silver_df)
-    profile_df = build_gold_load_profile(silver_df)
+    joined = current_silver_df.join(baseline, on=["composite_feeder_id"], how="left")
+
+    enough_history = F.col("zscore_history_count") >= F.lit(min_history_rows)
+    has_std = F.col("zscore_stddev").isNotNull() & (F.col("zscore_stddev") > F.lit(0.0))
+    zscore = F.when(
+        enough_history & has_std,
+        F.abs((F.col("total_consumption_active_import") - F.col("zscore_mean")) / F.col("zscore_stddev")),
+    )
+
+    is_outlier = enough_history & has_std & (zscore > F.lit(threshold))
+    clip_cap = F.col("zscore_mean") + (F.col("zscore_stddev") * F.lit(threshold))
+
+    # Hard-invalid rows are dropped from Gold regardless of z-score.
+    invalid_secondary = F.col("secondary_substation_unique_id").isNull() | (F.trim(F.col("secondary_substation_unique_id")) == "")
+    invalid_timestamp = F.col("data_collection_log_timestamp").isNull()
+    invalid_consumption = F.col("total_consumption_active_import").isNull() | (F.col("total_consumption_active_import") < F.lit(0.0))
+    invalid_device_count = F.col("aggregated_device_count_active").isNull() | (F.col("aggregated_device_count_active") <= F.lit(0))
+    is_invalid = invalid_secondary | invalid_timestamp | invalid_consumption | invalid_device_count
+
+    dq_action = (
+        F.when(is_invalid, F.lit("DROP"))
+        .when(is_outlier, F.lit("CLIP"))
+        .otherwise(F.lit("KEEP"))
+    )
+    dq_reason = (
+        F.when(is_invalid, F.lit("INVALID_RULE"))
+        .when(is_outlier, F.lit("ZSCORE_CLIPPED"))
+        .otherwise(F.lit(None))
+    )
+    adjusted_consumption = F.when(dq_action == F.lit("CLIP"), clip_cap).otherwise(F.col("total_consumption_active_import"))
+
+    return (
+        joined.withColumn("consumption_zscore", zscore)
+        .withColumn("dq_action", dq_action)
+        .withColumn("dq_reason", dq_reason)
+        .withColumn("data_quality_flag", F.when(dq_action == F.lit("DROP"), F.lit("FAIL")).otherwise(F.lit("PASS")))
+        .withColumn("adjusted_total_consumption_active_import", adjusted_consumption)
+    )
+
+
+def run_transform_spark(
+    run_date: date,
+    source_uri: str,
+    silver_out: str,
+    peak_out: str,
+    profile_out: str,
+    region: str,
+    zscore_threshold: float,
+    zscore_min_history_rows: int,
+) -> TransformCounts:
+    """Run production Spark/Glue transformation path."""
+    spark = get_spark("smart-meter-transform-daily", region)
+    run_date_str = run_date.isoformat()
+    run_date_lit = F.lit(run_date_str).cast("date")
+
+    source_with_ts = spark.read.parquet(source_uri).withColumn(
+        "event_ts",
+        F.to_timestamp("data_collection_log_timestamp"),
+    )
+
+    # External source dataset is the Bronze layer; filter by run_date at read time.
+    filtered = source_with_ts.filter(F.to_date("event_ts") == run_date_lit).drop("event_ts")
+    # Use all available Bronze rows as the z-score baseline population.
+    baseline_filtered = source_with_ts.drop("event_ts")
+
+    # Build silver rows first, then add z-score quality flags for curation.
+    silver_base_df = build_silver(filtered)
+    baseline_silver_df = build_silver(baseline_filtered)
+    silver_df = apply_zscore_quality_flag(
+        silver_base_df,
+        baseline_silver_df,
+        threshold=zscore_threshold,
+        min_history_rows=zscore_min_history_rows,
+    ).cache()
+
+    # Gold tables use clipped values and exclude hard-invalid dropped rows.
+    gold_input_df = (
+        silver_df.filter(F.col("dq_action") != F.lit("DROP"))
+        .withColumn("total_consumption_active_import", F.col("adjusted_total_consumption_active_import"))
+        .withColumn(
+            "consumption_per_active_device",
+            F.when(
+                F.col("aggregated_device_count_active") > 0,
+                F.col("adjusted_total_consumption_active_import") / F.col("aggregated_device_count_active"),
+            ).otherwise(F.lit(None)),
+        )
+        .cache()
+    )
+    peak_df = build_gold_peak(gold_input_df)
+    profile_df = build_gold_load_profile(gold_input_df)
 
     # Idempotent per-date writes via partition-specific output paths.
     silver_df.write.mode("overwrite").format("parquet").save(silver_out)
@@ -186,18 +277,22 @@ def main() -> None:
     profile_partition = partition_uri(cfg.gold_load_profile_output_uri, "consumption_date", run_date_str)
 
     counts = run_transform_spark(
-        run_date=run_date_str,
+        run_date=cfg.run_date,
         source_uri=cfg.source_uri,
         silver_out=silver_partition,
         peak_out=peak_partition,
         profile_out=profile_partition,
         region=cfg.aws_region,
+        zscore_threshold=cfg.zscore_threshold,
+        zscore_min_history_rows=cfg.zscore_min_history_rows,
     )
 
     print(
         {
             "run_date": run_date_str,
             "source_uri": cfg.source_uri,
+            "zscore_threshold": cfg.zscore_threshold,
+            "zscore_min_history_rows": cfg.zscore_min_history_rows,
             "raw_count": counts.raw_count,
             "silver_count": counts.silver_count,
             "peak_count": counts.peak_count,

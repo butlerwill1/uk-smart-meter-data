@@ -43,6 +43,8 @@ class PipelineConfig:
     run_date: date
     code_version: str
     pipeline_name: str
+    zscore_threshold: float
+    zscore_min_history_rows: int
 
     @property
     def silver_output_uri(self) -> str:
@@ -88,6 +90,13 @@ def build_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument("--athena-output-s3-uri", required=False, help="Athena output S3 URI")
     parser.add_argument("--pipeline-name", required=False, help="Pipeline name")
     parser.add_argument("--code-version", required=False, help="Code version")
+    parser.add_argument("--zscore-threshold", required=False, type=float, help="Absolute z-score threshold for anomalies")
+    parser.add_argument(
+        "--zscore-min-history-rows",
+        required=False,
+        type=int,
+        help="Minimum historical rows per feeder/slot before applying z-score rule",
+    )
     return parser
 
 
@@ -120,4 +129,8 @@ def load_config(args: argparse.Namespace) -> PipelineConfig:
         run_date=run_date,
         code_version=_arg_or_env(getattr(args, "code_version", None), "CODE_VERSION", "dev"),
         pipeline_name=_arg_or_env(getattr(args, "pipeline_name", None), "PIPELINE_NAME", DEFAULT_PIPELINE_NAME),
+        zscore_threshold=float(_arg_or_env(getattr(args, "zscore_threshold", None), "ZSCORE_THRESHOLD", "3.0")),
+        zscore_min_history_rows=int(
+            _arg_or_env(getattr(args, "zscore_min_history_rows", None), "ZSCORE_MIN_HISTORY_ROWS", "7")
+        ),
     )

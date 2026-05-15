@@ -25,7 +25,7 @@ enable_lakeformation_data_location_permissions    = false
 enable_lakeformation_register_resources           = false
 
 tags = {
-  Workload  = "uk-smart-meter"
+  Project  = "uk-smart-meter"
   CostScope = "portfolio"
-  CostOwner = "will"
+  Owner = "will"
 }

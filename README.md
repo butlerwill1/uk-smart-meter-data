@@ -1,9 +1,23 @@
 <!-- Summary: AWS-native UK smart meter pipeline with external Bronze, Glue transforms, Athena querying, and Terraform-managed infrastructure. -->
 # Energy Smart Meter Pipeline
 
-Portfolio-ready AWS data engineering project for UK smart meter half-hourly consumption data.
+AWS data engineering project for UK smart meter half-hourly consumption data.
 
 The pipeline reads an external Bronze dataset, transforms it with AWS Glue (PySpark), writes Silver/Gold parquet to S3, exposes tables through Glue Catalog + Athena, and runs SQL QA checks.
+
+## Insight Snapshots
+
+### Peak Hour Distribution
+
+![Peak hour distribution](docs/images/peak_hour_distribution.png)
+
+This chart shows when substations most frequently hit their daily peak. In this dataset, peak events are concentrated in a narrow evening window rather than being evenly spread across the day.
+
+### Top 10 Demand Concentration
+
+![Top 10 demand concentration](docs/images/top10_concentration.png)
+
+This chart shows how much of total demand is carried by the highest-demand substations. The cumulative line highlights concentration risk by showing how quickly demand share accumulates across the top ranks.
 
 ## Architecture
 
@@ -33,69 +47,34 @@ Components:
 uk-smart-meter-data/
 ├── README.md
 ├── pyproject.toml
-├── raw-parquet-test.py
-├── silver-parquet-test.py
+├── docs/
 ├── eda/
-│   ├── pandas-eda.ipynb
-│   └── pyspark.ipynb
 ├── src/
-│   ├── config.py
-│   ├── transform_daily.py
-│   ├── run_qa_checks.py
-│   ├── write_run_log.py
-│   ├── backfill_glue_range.py
-│   ├── load_source_data.py
-│   ├── athena_utils.py
-│   ├── athena_cli.py
-│   ├── gold_insights.py
-│   └── utils.py
 ├── sql/
-│   ├── qa_freshness.sql
-│   ├── qa_completeness.sql
-│   ├── qa_uniqueness.sql
-│   ├── qa_nulls.sql
-│   ├── qa_business_rules.sql
-│   └── insights/
-│       ├── 01_date_coverage.sql
-│       ├── 02_top_substations_by_total.sql
-│       ├── 03_system_peak_day.sql
-│       ├── 04_avg_load_shape_peak_trough.sql
-│       ├── 05_weekday_weekend_profile.sql
-│       ├── 06_substation_concentration.sql
-│       ├── 07_peak_window_concentration.sql
-│       ├── 08_day_total_volatility.sql
-│       ├── 09_evening_ramp_weekday_vs_weekend.sql
-│       └── 10_dno_outlier_screen.sql
 ├── tests/
-│   └── test_transform_daily.py
 └── terraform/
-    ├── main.tf
-    ├── variables.tf
-    ├── terraform.tfvars
-    ├── s3.tf
-    ├── glue_catalog.tf
-    ├── glue_job.tf
-    ├── iam.tf
-    ├── athena.tf
-    ├── eventbridge.tf
-    ├── lakeformation.tf
-    ├── step_functions.tf
-    └── outputs.tf
 ```
 
-## Dataset schema
+## Source dataset
+
+Source dataset (Bronze, read-only):
+
+- Provider: Weave
+- S3 location: `s3://weave.energy/smart-meter.parquet`
 
 Expected source columns:
 
-- `dataset_id`
-- `dno_alias`
-- `aggregated_device_count_active`
-- `total_consumption_active_import`
-- `data_collection_log_timestamp`
-- `geometry`
-- `secondary_substation_unique_id`
-- `lv_feeder_unique_id`
-- `bbox`
+| Column | Description |
+| --- | --- |
+| `dataset_id` | Source record identifier for the dataset slice/batch. |
+| `dno_alias` | Distribution Network Operator alias (for example, regional operator label). |
+| `aggregated_device_count_active` | Number of active devices/meters aggregated into the half-hour reading. |
+| `total_consumption_active_import` | Total active-import energy consumption for the record interval. |
+| `data_collection_log_timestamp` | Timestamp of the half-hour measurement in the source feed. |
+| `geometry` | Spatial point geometry for the feeder/substation context (stored as struct in parquet). |
+| `secondary_substation_unique_id` | Unique identifier for the secondary substation. |
+| `lv_feeder_unique_id` | Unique identifier for the low-voltage feeder. |
+| `bbox` | Bounding-box geometry metadata for spatial coverage (stored as struct in parquet). |
 
 ## Outputs
 
@@ -109,6 +88,36 @@ Gold tables:
 - `gold_peak_demand_substation_day`
 - `gold_avg_load_profile_day`
 - partition key: `consumption_date`
+
+`gold_peak_demand_substation_day` columns:
+
+| Column | Description |
+| --- | --- |
+| `consumption_date` | Date of consumption aggregated to day level (partition key). |
+| `dno_alias` | DNO alias for the substation group. |
+| `secondary_substation_unique_id` | Unique identifier of the secondary substation. |
+| `peak_consumption` | Maximum half-hourly consumption value observed for that substation/day. |
+| `peak_timestamp` | Timestamp at which `peak_consumption` occurred. |
+| `daily_total_consumption` | Sum of half-hourly consumption across the full day for that substation. |
+| `avg_half_hour_consumption` | Average half-hourly consumption across the day for that substation. |
+| `avg_active_devices` | Average active device count across the day for that substation. |
+| `feeder_count` | Distinct number of feeders observed for that substation/day. |
+| `reading_count` | Total number of half-hourly rows aggregated for that substation/day. |
+
+`gold_avg_load_profile_day` columns:
+
+| Column | Description |
+| --- | --- |
+| `consumption_date` | Date of consumption aggregated by half-hour slot (partition key). |
+| `hour_of_day` | Hour component (0-23) of the slot. |
+| `minute_of_hour` | Minute component of the slot (typically 0 or 30). |
+| `half_hour_slot` | Zero-based slot index for the day (0-47). |
+| `avg_consumption` | Average consumption across all contributing rows for that day/slot. |
+| `total_consumption` | Total consumption summed across all contributing rows for that day/slot. |
+| `reading_count` | Number of rows contributing to that day/slot aggregate. |
+| `substation_count` | Distinct number of substations contributing to that day/slot aggregate. |
+| `feeder_count` | Distinct number of feeders contributing to that day/slot aggregate. |
+| `avg_consumption_per_active_device` | Mean of per-row consumption-per-active-device for that day/slot. |
 
 Run log table:
 
@@ -257,51 +266,6 @@ Run QA script:
 
 ```bash
 python src/run_qa_checks.py --run-date 2024-02-02
-```
-
-## Cost profile
-
-Expected ongoing costs when daily schedule is disabled:
-
-- Low baseline cost for S3 storage, Glue Catalog metadata, and Lake Formation definitions.
-- Athena costs only when queries run (pay per data scanned).
-- Glue ETL cost only when Glue jobs are executed.
-
-For low-cost portfolio mode:
-
-- Keep `enable_daily_schedule = false`
-- Run Glue manually only for backfills/demo dates
-- Query curated Silver/Gold subsets in Athena
-
-## Disable daily runs while keeping Glue job
-
-Set in `terraform.tfvars`:
-
-```hcl
-enable_daily_schedule = false
-```
-
-Apply:
-
-```bash
-cd terraform
-terraform apply
-```
-
-This keeps the Glue job resource available but disables automatic daily triggering.
-
-## Destroy infra but preserve data bucket
-
-If `preserve_data = true`, data bucket has `prevent_destroy` and is intentionally protected.
-
-To tear down compute/metadata while keeping data, remove protected bucket resources from state, then destroy:
-
-```bash
-terraform state rm 'aws_s3_bucket.data_preserved[0]' \
-  'aws_s3_bucket_versioning.data' \
-  'aws_s3_bucket_server_side_encryption_configuration.data'
-
-terraform destroy
 ```
 
 ## Troubleshooting

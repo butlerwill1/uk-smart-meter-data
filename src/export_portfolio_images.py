@@ -149,6 +149,21 @@ def _chart_weekday_weekend(df: pd.DataFrame, out_dir: Path) -> Path:
     return out_path
 
 
+def _chart_dno_outlier_screen(df: pd.DataFrame, out_dir: Path) -> Path:
+    """Create bar chart of DNO mean-to-median demand ratio."""
+    df = _num(df, ["mean_to_median_ratio"]).sort_values("mean_to_median_ratio", ascending=False)
+    fig, ax = plt.subplots(figsize=(8.6, 4.8))
+    ax.bar(df["dno_alias"], df["mean_to_median_ratio"], color="#4e79a7")
+    ax.axhline(1.0, linestyle="--", linewidth=1, color="gray")
+    ax.set_title("DNO Demand Skew (Mean-to-Median Ratio)")
+    ax.set_ylabel("Mean / Median")
+    ax.set_xlabel("DNO")
+    ax.grid(axis="y", alpha=0.3)
+    out_path = out_dir / "dno_outlier_screen.png"
+    _save(fig, out_path)
+    return out_path
+
+
 def main() -> None:
     """CLI entrypoint for generating portfolio chart images."""
     parser = argparse.ArgumentParser(description="Export portfolio chart images from Athena gold tables")
@@ -240,6 +255,30 @@ def main() -> None:
     FROM agg
     ORDER BY day_type
     """
+    dno_outlier_screen_sql = """
+    WITH s AS (
+      SELECT
+        dno_alias,
+        secondary_substation_unique_id,
+        AVG(daily_total_consumption) AS mean_daily_total
+      FROM energy_smart_meter.gold_peak_demand_substation_day
+      GROUP BY 1,2
+    ), d AS (
+      SELECT
+        dno_alias,
+        AVG(mean_daily_total) AS dno_mean,
+        APPROX_PERCENTILE(mean_daily_total, 0.5) AS dno_median
+      FROM s
+      GROUP BY 1
+    )
+    SELECT
+      dno_alias,
+      dno_mean,
+      dno_median,
+      dno_mean / NULLIF(dno_median,0) AS mean_to_median_ratio
+    FROM d
+    ORDER BY mean_to_median_ratio DESC
+    """
 
     exported: list[Path] = []
     exported.append(_chart_dno_share(_run_sql(athena, sql=dno_share_sql, database=database, output_location=output_s3_uri, workgroup=args.workgroup), out_dir))
@@ -247,6 +286,18 @@ def main() -> None:
     exported.append(_chart_peak_hour_distribution(_run_sql(athena, sql=peak_hour_sql, database=database, output_location=output_s3_uri, workgroup=args.workgroup), out_dir))
     exported.append(_chart_concentration(_run_sql(athena, sql=concentration_sql, database=database, output_location=output_s3_uri, workgroup=args.workgroup), out_dir))
     exported.append(_chart_weekday_weekend(_run_sql(athena, sql=weekday_weekend_sql, database=database, output_location=output_s3_uri, workgroup=args.workgroup), out_dir))
+    exported.append(
+        _chart_dno_outlier_screen(
+            _run_sql(
+                athena,
+                sql=dno_outlier_screen_sql,
+                database=database,
+                output_location=output_s3_uri,
+                workgroup=args.workgroup,
+            ),
+            out_dir,
+        )
+    )
 
     print("Exported chart images:")
     for p in exported:

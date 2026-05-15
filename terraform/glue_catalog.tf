@@ -164,6 +164,38 @@ resource "aws_glue_catalog_table" "silver" {
       name = "consumption_per_active_device"
       type = "double"
     }
+    columns {
+      name = "zscore_mean"
+      type = "double"
+    }
+    columns {
+      name = "zscore_stddev"
+      type = "double"
+    }
+    columns {
+      name = "zscore_history_count"
+      type = "bigint"
+    }
+    columns {
+      name = "consumption_zscore"
+      type = "double"
+    }
+    columns {
+      name = "dq_action"
+      type = "string"
+    }
+    columns {
+      name = "data_quality_flag"
+      type = "string"
+    }
+    columns {
+      name = "dq_reason"
+      type = "string"
+    }
+    columns {
+      name = "adjusted_total_consumption_active_import"
+      type = "double"
+    }
   }
 
   partition_keys {
